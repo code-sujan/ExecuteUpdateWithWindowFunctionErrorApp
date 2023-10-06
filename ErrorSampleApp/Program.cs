@@ -9,22 +9,33 @@ class Program
         using var context = new AppDbContext();
         context.SaveChanges();
         if (!context.Products.Any()) SeedInitialData(context);
-        var lastCpQuery = GetLastCp(context);
-
-        var orderQuery = from item in context.PurchaseOrders
-            join cp in lastCpQuery on new { item.ProductId, item.UnitId } equals new { cp.ProductId, cp.UnitId }
+        
+        var orderQueryWithoutJoin = from item in context.PurchaseOrders
+            join cp in GetLastCpWithoutJoin(context) on new { item.ProductId, item.UnitId } equals new { cp.ProductId, cp.UnitId }
+            select new
+            {
+                item,
+                Rate = cp.Rate
+            };
+        orderQueryWithoutJoin.ExecuteUpdate(setters =>
+            setters.SetProperty(x => x.item.LastCp, x => x.Rate)
+                .SetProperty(x => x.item.NetAmount, x => x.item.Quantity * x.Rate)
+        ); // This works too
+        
+        var orderQueryWithJoin = from item in context.PurchaseOrders
+            join cp in GetLastCp(context) on new { item.ProductId, item.UnitId } equals new { cp.ProductId, cp.UnitId }
             select new
             {
                 item,
                 Rate = cp.Rate,
                 RateWithoutVat = cp.RateWithoutVat
             };
-        var list = orderQuery.ToList(); // This works fetching rate info
+        var list = orderQueryWithJoin.ToList(); // This works fetching rate info
         
-        orderQuery.ExecuteUpdate(setters =>
+        orderQueryWithJoin.ExecuteUpdate(setters =>
             setters.SetProperty(x => x.item.LastCp, x => x.Rate)
                 .SetProperty(x => x.item.LastCpWithoutVat, x => x.RateWithoutVat)
-                .SetProperty(x => x.item.LastCp, x => x.item.Quantity * x.Rate)
+                .SetProperty(x => x.item.NetAmount, x => x.item.Quantity * x.Rate)
             ); // This Fails
         Console.WriteLine("Completed with success");
     }
@@ -44,6 +55,21 @@ class Program
             };
         return res;
     }
+    
+    static IQueryable<LastCpDto> GetLastCpWithoutJoin(AppDbContext context)
+        {
+            var res = from item in context.ProductUnitLinks
+                from cp in context.ProductCps.Where(x => x.ProductId == item.ProductId && x.UnitId == item.UnitId)
+                    .OrderByDescending(x => x.Date)
+                    .Take(1)
+                select new LastCpDto
+                {
+                    ProductId = item.ProductId,
+                    UnitId = item.UnitId,
+                    Rate = cp.Rate,
+                };
+            return res;
+        }
 
     static void SeedInitialData(AppDbContext context)
     {
